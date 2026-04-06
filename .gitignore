@@ -1,0 +1,17 @@
+# Python / Machine Learning
+venv/
+__pycache__/
+*.pyc
+data/
+models/weights/*.keras
+models/weights/*.h5
+scan_results.json
+
+# React / Node.js
+frontend/node_modules/
+frontend/dist/
+.env
+
+# OS / Editor Files
+.DS_Store
+.vscode/
