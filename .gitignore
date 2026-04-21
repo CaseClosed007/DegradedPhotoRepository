@@ -12,6 +12,10 @@ frontend/node_modules/
 frontend/dist/
 .env
 
+# Reports
+report.html
+report.pdf
+
 # OS / Editor Files
 .DS_Store
 .vscode/
