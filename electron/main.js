@@ -76,7 +76,13 @@ function closeSplash() {
 
 const IS_WIN = process.platform === 'win32'
 
-// ── Find Python interpreter ──────────────────────────────────────────────────
+// Venv lives in the user's app data — writable, exempt from PEP 668, cross-platform
+const venvDir    = path.join(app.getPath('userData'), 'app-venv')
+const venvPython = IS_WIN
+    ? path.join(venvDir, 'Scripts', 'python.exe')
+    : path.join(venvDir, 'bin', 'python3')
+
+// ── Find system Python (used only to create the venv) ───────────────────────
 function findPython() {
     // 'py' is the Windows Python launcher — always in PATH even when python/python3 aren't
     const candidates = IS_WIN
@@ -88,30 +94,48 @@ function findPython() {
             const out = execSync(`"${p}" --version`, {
                 encoding: 'utf8',
                 stdio: 'pipe',
-                shell: IS_WIN   // required on Windows to find executables in PATH
+                shell: IS_WIN
             })
-            // Confirm it's a real Python — the Windows Store stub exits 0 but prints nothing
+            // Reject Windows Store stub — it exits 0 but prints nothing
             if (out && out.includes('Python')) return p
         } catch { continue }
     }
     return null
 }
 
-// ── Dependency installation ──────────────────────────────────────────────────
-function installRequirements(python) {
+// ── Create isolated venv in userData ────────────────────────────────────────
+function setupVenv(systemPython) {
     return new Promise((resolve, reject) => {
-        // Even if the flag exists, verify uvicorn is actually importable.
-        // If not, the previous install was incomplete — delete flag and reinstall.
+        if (fs.existsSync(venvPython)) {
+            resolve()   // venv already exists
+            return
+        }
+        updateSplash('Creating Python environment…')
+        const proc = spawn(systemPython, ['-m', 'venv', venvDir], { shell: IS_WIN })
+        proc.on('close', code => {
+            if (code === 0) resolve()
+            else reject(new Error(`Failed to create Python environment (code ${code})`))
+        })
+        proc.on('error', () => {
+            reject(new Error('Could not create Python environment.\nPlease install Python 3 from https://python.org'))
+        })
+    })
+}
+
+// ── Install dependencies into the venv ──────────────────────────────────────
+function installRequirements() {
+    return new Promise((resolve, reject) => {
+        // Verify uvicorn is importable; if not, wipe the flag and reinstall
         if (fs.existsSync(depsFlag)) {
             try {
-                execSync(`"${python}" -c "import uvicorn"`, {
+                execSync(`"${venvPython}" -c "import uvicorn"`, {
                     stdio: 'ignore',
                     shell: IS_WIN
                 })
-                resolve()   // uvicorn is importable — deps are healthy
+                resolve()   // deps are healthy
                 return
             } catch {
-                fs.unlinkSync(depsFlag)   // stale flag — fall through to reinstall
+                fs.unlinkSync(depsFlag)   // stale flag — reinstall
             }
         }
 
@@ -119,8 +143,8 @@ function installRequirements(python) {
 
         const reqFile = path.join(projectRoot, 'requirements.txt')
 
-        // python -m pip ensures we install into the exact Python that runs the app
-        const install = spawn(python, ['-m', 'pip', 'install', '-r', reqFile], {
+        // Installing inside a venv never hits PEP 668 or permission errors
+        const install = spawn(venvPython, ['-m', 'pip', 'install', '-r', reqFile], {
             cwd: projectRoot,
             shell: IS_WIN
         })
@@ -130,23 +154,23 @@ function installRequirements(python) {
                 fs.writeFileSync(depsFlag, new Date().toISOString())
                 resolve()
             } else {
-                reject(new Error(`pip install failed (exit code ${code}).\nMake sure Python 3 is installed from https://python.org`))
+                reject(new Error(`Dependency install failed (code ${code}).\nPlease check your internet connection and relaunch.`))
             }
         })
 
-        install.on('error', () => {
-            reject(new Error('Python not found.\nPlease install Python 3 from https://python.org and relaunch.'))
+        install.on('error', err => {
+            reject(new Error(`Install error: ${err.message}`))
         })
     })
 }
 
 // ── FastAPI server ───────────────────────────────────────────────────────────
-function startPythonServer(python) {
+function startPythonServer() {
     updateSplash('Starting AI backend…')
 
-    // python -m uvicorn works regardless of where pip installed the binary
+    // Run uvicorn from inside the venv — guaranteed to exist after installRequirements
     pythonProcess = spawn(
-        python,
+        venvPython,
         ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '8000'],
         {
             cwd: projectRoot,
@@ -219,13 +243,14 @@ app.whenReady().then(async () => {
     createSplash('Starting up…')
 
     try {
-        const python = findPython()
-        if (!python) {
+        const systemPython = findPython()
+        if (!systemPython) {
             throw new Error('Python 3 not found.\nPlease install it from https://python.org and relaunch the app.')
         }
 
-        await installRequirements(python)
-        startPythonServer(python)
+        await setupVenv(systemPython)
+        await installRequirements()
+        startPythonServer()
         updateSplash('Waiting for AI backend to be ready…')
         await waitForServer(40)   // up to 20 seconds
         createMainWindow()
