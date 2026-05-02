@@ -12,8 +12,10 @@ const projectRoot = isDev
     ? path.join(__dirname, '..')
     : process.resourcesPath
 
-// Flag file written after first successful pip install so we never run it again
-const depsFlag = path.join(app.getPath('userData'), '.deps_installed')
+// Initialized inside app.whenReady() — app.getPath() is only valid after app is ready
+let depsFlag   = null
+let venvDir    = null
+let venvPython = null
 
 let mainWindow = null
 let splashWindow = null
@@ -75,12 +77,6 @@ function closeSplash() {
 }
 
 const IS_WIN = process.platform === 'win32'
-
-// Venv lives in the user's app data — writable, exempt from PEP 668, cross-platform
-const venvDir    = path.join(app.getPath('userData'), 'app-venv')
-const venvPython = IS_WIN
-    ? path.join(venvDir, 'Scripts', 'python.exe')
-    : path.join(venvDir, 'bin', 'python3')
 
 // ── Find system Python (used only to create the venv) ───────────────────────
 function findPython() {
@@ -255,6 +251,14 @@ function createMainWindow() {
 
 // ── App lifecycle ────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
+    // app.getPath() is only safe to call after app is ready
+    const userData = app.getPath('userData')
+    depsFlag   = path.join(userData, '.deps_installed')
+    venvDir    = path.join(userData, 'app-venv')
+    venvPython = IS_WIN
+        ? path.join(venvDir, 'Scripts', 'python.exe')
+        : path.join(venvDir, 'bin', 'python3')
+
     createSplash('Starting up…')
 
     try {
