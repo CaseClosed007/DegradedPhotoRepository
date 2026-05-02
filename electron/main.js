@@ -74,16 +74,27 @@ function closeSplash() {
     }
 }
 
+const IS_WIN = process.platform === 'win32'
+
 // ── Find Python interpreter ──────────────────────────────────────────────────
 function findPython() {
-    const candidates = process.platform === 'win32'
-        ? ['python', 'python3']
+    // 'py' is the Windows Python launcher — always in PATH even when python/python3 aren't
+    const candidates = IS_WIN
+        ? ['py', 'python', 'python3']
         : ['python3', '/usr/bin/python3', '/usr/local/bin/python3', 'python']
 
-    return candidates.find(p => {
-        try { execSync(`"${p}" --version`, { stdio: 'ignore' }); return true }
-        catch { return false }
-    })
+    for (const p of candidates) {
+        try {
+            const out = execSync(`"${p}" --version`, {
+                encoding: 'utf8',
+                stdio: 'pipe',
+                shell: IS_WIN   // required on Windows to find executables in PATH
+            })
+            // Confirm it's a real Python — the Windows Store stub exits 0 but prints nothing
+            if (out && out.includes('Python')) return p
+        } catch { continue }
+    }
+    return null
 }
 
 // ── Dependency installation ──────────────────────────────────────────────────
@@ -93,7 +104,10 @@ function installRequirements(python) {
         // If not, the previous install was incomplete — delete flag and reinstall.
         if (fs.existsSync(depsFlag)) {
             try {
-                execSync(`"${python}" -c "import uvicorn"`, { stdio: 'ignore' })
+                execSync(`"${python}" -c "import uvicorn"`, {
+                    stdio: 'ignore',
+                    shell: IS_WIN
+                })
                 resolve()   // uvicorn is importable — deps are healthy
                 return
             } catch {
@@ -105,9 +119,10 @@ function installRequirements(python) {
 
         const reqFile = path.join(projectRoot, 'requirements.txt')
 
-        // Use python -m pip so we always install into the same Python that runs the app
+        // python -m pip ensures we install into the exact Python that runs the app
         const install = spawn(python, ['-m', 'pip', 'install', '-r', reqFile], {
-            cwd: projectRoot
+            cwd: projectRoot,
+            shell: IS_WIN
         })
 
         install.on('close', code => {
@@ -115,12 +130,12 @@ function installRequirements(python) {
                 fs.writeFileSync(depsFlag, new Date().toISOString())
                 resolve()
             } else {
-                reject(new Error(`pip install failed (exit code ${code}).\nMake sure Python 3 is installed.`))
+                reject(new Error(`pip install failed (exit code ${code}).\nMake sure Python 3 is installed from https://python.org`))
             }
         })
 
         install.on('error', () => {
-            reject(new Error('Python not found. Please install Python 3 from https://python.org'))
+            reject(new Error('Python not found.\nPlease install Python 3 from https://python.org and relaunch.'))
         })
     })
 }
@@ -129,13 +144,14 @@ function installRequirements(python) {
 function startPythonServer(python) {
     updateSplash('Starting AI backend…')
 
-    // Use python -m uvicorn — works regardless of where pip installed the binary
+    // python -m uvicorn works regardless of where pip installed the binary
     pythonProcess = spawn(
         python,
         ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '8000'],
         {
             cwd: projectRoot,
-            stdio: isDev ? 'inherit' : 'ignore'
+            stdio: isDev ? 'inherit' : 'ignore',
+            shell: IS_WIN
         }
     )
 
