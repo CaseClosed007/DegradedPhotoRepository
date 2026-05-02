@@ -2,10 +2,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import json
 import os
-import subprocess
 
 from clean_my_drive import generate_scan_report
 from src.enhance import enhance_image
@@ -14,7 +14,13 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:8000",   # Electron desktop app
+        "http://localhost:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,25 +33,6 @@ class EnhanceRequest(BaseModel):
     image_path: str
     reason: str
 
-# --- THE MISSING ENDPOINT ---
-@app.get("/api/browse")
-def browse_for_folder():
-    """Opens a native macOS folder picker using AppleScript."""
-    try:
-        apple_script = 'POSIX path of (choose folder with prompt "Select Gallery Folder to Scan")'
-        result = subprocess.run(
-            ["osascript", "-e", apple_script],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            folder_path = result.stdout.strip()
-            return {"folder_path": folder_path}
-        else:
-            return {"folder_path": ""}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# ----------------------------
 
 @app.post("/api/scan")
 def run_scan(request: ScanRequest):
@@ -88,6 +75,11 @@ def get_image(path: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Image not found on disk")
     return FileResponse(path)
+
+# Must be mounted LAST — after all /api routes so they take priority
+_frontend = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+if os.path.isdir(_frontend):
+    app.mount("/", StaticFiles(directory=_frontend, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn

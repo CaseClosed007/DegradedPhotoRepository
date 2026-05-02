@@ -14,7 +14,7 @@ function App() {
   const [showEnhanced, setShowEnhanced]     = useState({});
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/degraded-photos')
+    fetch('/api/degraded-photos')
       .then(res => res.json())
       .then(data => {
         setPhotos(data);
@@ -27,11 +27,16 @@ function App() {
   const handleBrowse = async () => {
     setIsBrowsing(true);
     try {
-      const res  = await fetch('http://localhost:8000/api/browse');
-      const data = await res.json();
-      if (data.folder_path) setTargetFolder(data.folder_path);
+      if (window.electronAPI) {
+        // Running inside Electron — use native cross-platform dialog
+        const folder = await window.electronAPI.browseFolder();
+        if (folder) setTargetFolder(folder);
+      } else {
+        // Running in browser dev mode — user must type the path manually
+        alert('Folder picker only works in the desktop app. Please type the path directly.');
+      }
     } catch {
-      alert('Failed to open native file browser.');
+      alert('Failed to open folder picker.');
     } finally {
       setIsBrowsing(false);
     }
@@ -45,7 +50,7 @@ function App() {
     setEnhancedPhotos({});
     setShowEnhanced({});
     try {
-      const res  = await fetch('http://localhost:8000/api/scan', {
+      const res  = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folder_path: targetFolder }),
@@ -67,7 +72,7 @@ function App() {
   const handleEnhance = async (photo) => {
     setEnhancing(prev => new Set(prev).add(photo.id));
     try {
-      const res  = await fetch('http://localhost:8000/api/enhance', {
+      const res  = await fetch('/api/enhance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image_path: photo.path, reason: photo.reason }),
@@ -195,8 +200,8 @@ function App() {
             const isBlur           = photo.reason.includes('Blur');
 
             const imageSrc = isViewingEnhanced
-              ? `http://localhost:8000/api/image?path=${encodeURIComponent(enhancedPath)}`
-              : `http://localhost:8000/api/image?path=${encodeURIComponent(photo.path)}`;
+              ? `/api/image?path=${encodeURIComponent(enhancedPath)}`
+              : `/api/image?path=${encodeURIComponent(photo.path)}`;
 
             return (
               <div
@@ -267,7 +272,7 @@ function App() {
 
                     {enhancedPath && (
                       <a
-                        href={`http://localhost:8000/api/image?path=${encodeURIComponent(enhancedPath)}`}
+                        href={`/api/image?path=${encodeURIComponent(enhancedPath)}`}
                         download
                         className="download-link"
                       >
