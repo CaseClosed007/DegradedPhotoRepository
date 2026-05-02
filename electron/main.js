@@ -168,38 +168,53 @@ function installRequirements() {
 function startPythonServer() {
     updateSplash('Starting AI backend…')
 
-    // Run uvicorn from inside the venv — guaranteed to exist after installRequirements
+    // Write server logs to userData so crashes are diagnosable
+    const logPath = path.join(app.getPath('userData'), 'server.log')
+    const logStream = fs.createWriteStream(logPath, { flags: 'a' })
+
     pythonProcess = spawn(
         venvPython,
         ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '8000'],
         {
             cwd: projectRoot,
-            stdio: isDev ? 'inherit' : 'ignore',
+            stdio: isDev ? 'inherit' : ['ignore', logStream, logStream],
             shell: IS_WIN
         }
     )
 
     pythonProcess.on('error', err => {
-        dialog.showErrorBox('Backend Error', `Failed to start server:\n${err.message}`)
+        dialog.showErrorBox('Backend Error', `Failed to start server:\n${err.message}\n\nLog: ${logPath}`)
         app.quit()
     })
 
     pythonProcess.on('exit', (code) => {
         if (mainWindow && !mainWindow.isDestroyed() && code !== 0) {
-            dialog.showErrorBox('Backend Crashed', `Server exited unexpectedly (code ${code})`)
+            dialog.showErrorBox('Backend Crashed',
+                `Server exited unexpectedly (code ${code})\n\nCheck log for details:\n${logPath}`)
         }
     })
 }
 
 // ── Wait for FastAPI to respond ──────────────────────────────────────────────
-function waitForServer(retries = 40) {
+// TensorFlow cold-start can take 30–60 s on first run — allow up to 2 minutes
+function waitForServer(retries = 240) {
     return new Promise((resolve, reject) => {
         const attempt = (n) => {
-            http.get('http://127.0.0.1:8000', res => {
+            // Update splash message as time passes so the user isn't confused
+            const elapsed = (240 - n) * 0.5
+            if (elapsed > 10 && elapsed <= 10.5)
+                updateSplash('Loading AI models… (first launch takes up to 2 minutes)')
+            if (elapsed > 60 && elapsed <= 60.5)
+                updateSplash('Almost ready — loading TensorFlow weights…')
+
+            http.get('http://127.0.0.1:8000', () => {
                 resolve()
             }).on('error', () => {
                 if (n <= 0) {
-                    reject(new Error('Server did not start in time.'))
+                    const logPath = path.join(app.getPath('userData'), 'server.log')
+                    reject(new Error(
+                        `Server did not start within 2 minutes.\n\nCheck the log for errors:\n${logPath}`
+                    ))
                 } else {
                     setTimeout(() => attempt(n - 1), 500)
                 }
@@ -252,7 +267,7 @@ app.whenReady().then(async () => {
         await installRequirements()
         startPythonServer()
         updateSplash('Waiting for AI backend to be ready…')
-        await waitForServer(40)   // up to 20 seconds
+        await waitForServer(240)  // up to 2 minutes — TensorFlow cold-start is slow
         createMainWindow()
     } catch (err) {
         closeSplash()
