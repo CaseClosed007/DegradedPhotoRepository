@@ -74,35 +74,39 @@ function closeSplash() {
     }
 }
 
+// ── Find Python interpreter ──────────────────────────────────────────────────
+function findPython() {
+    const candidates = process.platform === 'win32'
+        ? ['python', 'python3']
+        : ['python3', '/usr/bin/python3', '/usr/local/bin/python3', 'python']
+
+    return candidates.find(p => {
+        try { execSync(`"${p}" --version`, { stdio: 'ignore' }); return true }
+        catch { return false }
+    })
+}
+
 // ── Dependency installation ──────────────────────────────────────────────────
-function installRequirements() {
+function installRequirements(python) {
     return new Promise((resolve, reject) => {
+        // Even if the flag exists, verify uvicorn is actually importable.
+        // If not, the previous install was incomplete — delete flag and reinstall.
         if (fs.existsSync(depsFlag)) {
-            resolve()   // already installed on a previous launch
-            return
+            try {
+                execSync(`"${python}" -c "import uvicorn"`, { stdio: 'ignore' })
+                resolve()   // uvicorn is importable — deps are healthy
+                return
+            } catch {
+                fs.unlinkSync(depsFlag)   // stale flag — fall through to reinstall
+            }
         }
 
         updateSplash('Installing Python dependencies (first launch only)…')
 
         const reqFile = path.join(projectRoot, 'requirements.txt')
 
-        // Try venv pip first, then system pip3, then pip
-        const pipCandidates = [
-            path.join(projectRoot, 'venv', 'bin', 'pip'),
-            'pip3',
-            'pip'
-        ]
-        const pip = pipCandidates.find(p => {
-            try { execSync(`"${p}" --version`, { stdio: 'ignore' }); return true }
-            catch { return false }
-        })
-
-        if (!pip) {
-            reject(new Error('pip not found. Please install Python 3 and pip.'))
-            return
-        }
-
-        const install = spawn(pip, ['install', '-r', reqFile], {
+        // Use python -m pip so we always install into the same Python that runs the app
+        const install = spawn(python, ['-m', 'pip', 'install', '-r', reqFile], {
             cwd: projectRoot
         })
 
@@ -111,40 +115,26 @@ function installRequirements() {
                 fs.writeFileSync(depsFlag, new Date().toISOString())
                 resolve()
             } else {
-                reject(new Error(`pip install exited with code ${code}`))
+                reject(new Error(`pip install failed (exit code ${code}).\nMake sure Python 3 is installed.`))
             }
         })
 
-        install.on('error', err => reject(err))
+        install.on('error', () => {
+            reject(new Error('Python not found. Please install Python 3 from https://python.org'))
+        })
     })
 }
 
 // ── FastAPI server ───────────────────────────────────────────────────────────
-function startPythonServer() {
+function startPythonServer(python) {
     updateSplash('Starting AI backend…')
 
-    // Try venv uvicorn first, then system uvicorn
-    const uvicornCandidates = [
-        path.join(projectRoot, 'venv', 'bin', 'uvicorn'),
-        'uvicorn'
-    ]
-    const uvicorn = uvicornCandidates.find(p => {
-        try { execSync(`"${p}" --version`, { stdio: 'ignore' }); return true }
-        catch { return false }
-    })
-
-    if (!uvicorn) {
-        dialog.showErrorBox('Startup Error', 'uvicorn not found. Run: pip install uvicorn')
-        app.quit()
-        return
-    }
-
+    // Use python -m uvicorn — works regardless of where pip installed the binary
     pythonProcess = spawn(
-        uvicorn,
-        ['server:app', '--host', '127.0.0.1', '--port', '8000'],
+        python,
+        ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '8000'],
         {
             cwd: projectRoot,
-            // Pipe logs so they appear in Electron's dev-console when in dev mode
             stdio: isDev ? 'inherit' : 'ignore'
         }
     )
@@ -154,8 +144,7 @@ function startPythonServer() {
         app.quit()
     })
 
-    pythonProcess.on('exit', (code, signal) => {
-        // If it exits while the window is open something went wrong
+    pythonProcess.on('exit', (code) => {
         if (mainWindow && !mainWindow.isDestroyed() && code !== 0) {
             dialog.showErrorBox('Backend Crashed', `Server exited unexpectedly (code ${code})`)
         }
@@ -214,8 +203,13 @@ app.whenReady().then(async () => {
     createSplash('Starting up…')
 
     try {
-        await installRequirements()
-        startPythonServer()
+        const python = findPython()
+        if (!python) {
+            throw new Error('Python 3 not found.\nPlease install it from https://python.org and relaunch the app.')
+        }
+
+        await installRequirements(python)
+        startPythonServer(python)
         updateSplash('Waiting for AI backend to be ready…')
         await waitForServer(40)   // up to 20 seconds
         createMainWindow()
